@@ -13,41 +13,44 @@ int main(int argc, char** argv)
 
     cv::Mat kout_1, kout_2, match, good_match, img_match;
     cv::Mat d_1, d_2;
-    const cv::Mat img_1 = cv::imread("image1.jpg", 0);
-    const cv::Mat img_2 = cv::imread("image2.jpg", 0);
+    const cv::Mat img_1 = cv::imread("in/object.jpg", 0);
+    const cv::Mat img_2 = cv::imread("in/scene.jpg", 0);
 
     std::vector<cv::KeyPoint> kp_1, kp_2;
     f2d->detectAndCompute(img_1, cv::noArray(), kp_1, d_1);
     f2d->detectAndCompute(img_2, cv::noArray(), kp_2, d_2);
     
     cv::drawKeypoints(img_1, kp_1, kout_1);
-    cv::imwrite("kp_1.jpg", kout_1);
+    cv::imwrite("out/kp_1.jpg", kout_1);
     cv::drawKeypoints(img_2, kp_2, kout_2);
-    cv::imwrite("kp_2.jpg", kout_2);
+    cv::imwrite("out/kp_2.jpg", kout_2);
 
     cv::FlannBasedMatcher matcher;
     std::vector<cv::DMatch> matches;
     matcher.match(d_1, d_2, matches);
+    printf("%lu\n%lu\n", kp_1.size(), kp_2.size());
+    printf("%d %d\n%d %d\n", d_1.rows, d_1.cols, d_2.rows, d_2.cols);
 
     cv::drawMatches(img_1, kp_1, img_2, kp_2, matches, match);
-    cv::imwrite("matches.jpg", match);
+    cv::imwrite("out/matches.jpg", match);
 
     double max_dist = 0, min_dist = 100;
     for(int i=0; i < d_1.rows; i++){
         double dist = matches[i].distance;
-        if(dist<min_dist) min_dist = dist;
+        if(dist > 0 && dist<min_dist) min_dist = dist;
         if(dist>max_dist) max_dist = dist;
     }
 
+    printf("%lf\n", min_dist);
     std::vector<cv::DMatch> good_matches;
     for(int i=0; i < d_1.rows; i++){
-        if(matches[i].distance < 3*min_dist){
+        if(matches[i].distance < 2*min_dist){
             good_matches.push_back(matches[i]);
         }
     }
 
     cv::drawMatches(img_1, kp_1, img_2, kp_2, good_matches, good_match, cv::Scalar::all(-1), cv::Scalar::all(-1), std::vector<char>(), cv::DrawMatchesFlags::NOT_DRAW_SINGLE_POINTS);
-    cv::imwrite("good_match.jpg", good_match);
+    cv::imwrite("out/good_match.jpg", good_match);
 
     std::vector<cv::Point2f> obj, scene;
     for(int i=0; i<good_matches.size(); i++){
@@ -56,6 +59,12 @@ int main(int argc, char** argv)
     }
 
     cv::Mat H = cv::findHomography(obj, scene, CV_RANSAC);
+    for(int i=0; i<H.rows; i++){
+        for(int j=0; j<H.cols; j++){
+            printf("%lf ", H.at<double>(i,j));
+        }
+        printf("\n");
+    }
     std::vector<cv::Point2f> obj_corners(4), scene_corners(4);
     obj_corners[0] = cv::Point(0,0);
     obj_corners[1] = cv::Point(img_1.cols, 0);
@@ -63,12 +72,16 @@ int main(int argc, char** argv)
     obj_corners[3] = cv::Point(0, img_1.rows); 
     
     cv::perspectiveTransform(obj_corners, scene_corners, H);
+    for(int i=0; i<4; i++){
+        printf("%lf %lf\n", scene_corners.at(i).x, scene_corners.at(i).y);
+    }
     cv::Scalar color(0,255,0);
-    line(img_match, scene_corners[0] + cv::Point2f(img_1.cols, 0), scene_corners[1] + cv::Point2f(img_1.cols, 0), color, 4);
-    line(img_match, scene_corners[1] + cv::Point2f(img_1.cols, 0), scene_corners[2] + cv::Point2f(img_1.cols, 0), color, 4); 
-    line(img_match, scene_corners[2] + cv::Point2f(img_1.cols, 0), scene_corners[3] + cv::Point2f(img_1.cols, 0), color, 4);
-    line(img_match, scene_corners[3] + cv::Point2f(img_1.cols, 0), scene_corners[0] + cv::Point2f(img_1.cols, 0), color, 4);
+    cv::imwrite("out/image.jpg", good_match);
+    line(img_2, scene_corners[0], scene_corners[1], color, 4);
+    line(img_2, scene_corners[1], scene_corners[2], color, 4); 
+    line(img_2, scene_corners[2], scene_corners[3], color, 4);
+    line(img_2, scene_corners[3], scene_corners[0], color, 4);
     
-    cv::imwrite("image.jpg", img_match);
+    cv::imwrite("out/image.jpg", img_2);
     return 0;
 }

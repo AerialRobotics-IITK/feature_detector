@@ -14,8 +14,11 @@ include_directories(${Eigen_INCLUDE_DIRS})
 find_package(OpenCV 3 REQUIRED)
 include_directories(${OpenCV_INCLUDE_DIRS})
 
-cs_add_executable(basic_sift src/basic_sift.cxx)
-target_link_libraries(basic_sift ${catkin_LIBRARIES} ${OpenCV_LIBRARIES} opencv_xfeatures2d opencv_core)
+cs_add_executable(flann_sift src/flann_sift.cxx)
+target_link_libraries(flann_sift ${catkin_LIBRARIES} ${OpenCV_LIBRARIES} opencv_xfeatures2d)
+
+cs_add_executable(sift src/sift.cxx)
+target_link_libraries(sift ${catkin_LIBRARIES} ${OpenCV_LIBRARIES} opencv_xfeatures2d)
 
 cs_install()
 cs_export()
