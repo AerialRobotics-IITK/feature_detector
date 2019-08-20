@@ -11,7 +11,7 @@ int main(int argc, char** argv)
     ros::init(argc, argv, "feature_detector");
     cv::Ptr<cv::Feature2D> f2d = cv::xfeatures2d::SIFT::create();
 
-    cv::Mat kout_1, kout_2, match, match1, match2, good_match, img_match;
+    cv::Mat kout_1, kout_2, match1, match2, img_match, good_match;
     cv::Mat d_1, d_2;
     const cv::Mat img_1 = cv::imread("in/object.jpg", 0);
     const cv::Mat img_2 = cv::imread("in/scene.jpg", 0);
@@ -25,7 +25,7 @@ int main(int argc, char** argv)
     cv::drawKeypoints(img_2, kp_2, kout_2);
     cv::imwrite("out/kp_2.jpg", kout_2);
 
-    cv::FlannBasedMatcher matcher = cv::FlannBasedMatcher(cv::makePtr<cv::flann::KDTreeIndexParams>(5));
+    cv::BFMatcher matcher;
     std::vector<std::vector<cv::DMatch>> matches;
     matcher.knnMatch(d_1, d_2, matches, 2);
 
@@ -44,6 +44,7 @@ int main(int argc, char** argv)
     cv::drawMatches(img_1, kp_1, img_2, kp_2, matches, img_match, cv::Scalar(0,255,0), cv::Scalar(255,0,0), std::vector<std::vector<char>>(), cv::DrawMatchesFlags::NOT_DRAW_SINGLE_POINTS);
     cv::imwrite("out/matches.jpg", img_match);
 
+    // make ratio a parameter
     std::vector<std::vector<cv::DMatch>> good_matches;
     for(int i=0; i < matches.size(); i++){
         printf("%lf %lf\n", matches[i][0].distance, matches[i][1].distance);
