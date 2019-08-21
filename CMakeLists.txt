@@ -23,5 +23,8 @@ target_link_libraries(sift ${catkin_LIBRARIES} ${OpenCV_LIBRARIES} opencv_xfeatu
 cs_add_executable(knn_sift src/knn_sift.cxx)
 target_link_libraries(knn_sift ${catkin_LIBRARIES} ${OpenCV_LIBRARIES} opencv_xfeatures2d)
 
+cs_add_executable(sample src/sample.cxx)
+target_link_libraries(sample ${catkin_LIBRARIES} ${OpenCV_LIBRARIES} opencv_xfeatures2d)
+
 cs_install()
 cs_export()

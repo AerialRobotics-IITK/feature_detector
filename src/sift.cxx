@@ -11,6 +11,7 @@
 typedef std::vector<cv::Mat> Mats;
 typedef std::vector<cv::KeyPoint> points;
 typedef std::vector<cv::DMatch> match;
+typedef std::vector<match> nn_match;
 
 cv::Ptr<cv::Feature2D> detector = cv::xfeatures2d::SIFT::create();
 
@@ -28,12 +29,19 @@ int main(int argc, char** argv){
         images.push_back(image);
     }
 
-    std::vector<points> keypoints; points kpts;
-    Mats descriptors; cv::Mat desc;
+    // reduce processing by precomputing and storing
+    std::vector<points> keypoints; points kpts, obj_kpts;
+    Mats descriptors; cv::Mat desc, obj_descs;
     
     for(int i=0; i<n; i++){
         detector->detectAndCompute(images.at(i), cv::noArray(), kpts, desc);
         keypoints.push_back(kpts); descriptors.push_back(desc);
+    }
+    cv::hconcat(desc, obj_descs);
+    for(int i=0; i<keypoints.size(); i++){
+        for(int j=0; j<keypoints[i].size(); j++){
+            obj_kpts.push_back(keypoints[i].at(j));
+        }
     }
 
     if(debug){
@@ -41,81 +49,55 @@ int main(int argc, char** argv){
         for(int i=0; i<n; i++){
             cv::drawKeypoints(images.at(i), keypoints.at(i), output);
             cv::imshow("/home/tanay/catkin_ws/src/feature_detector/out/kpts_" + std::to_string(i+1), output);
-            cv::waitKey(0);
+            while(cv::waitKey(5) != 'q');
         }
     }
     std::cout << "finished loading database" << std::endl;
+
     // replace with loop here for a video scene
     cv::Mat scene = cv::imread("/home/tanay/catkin_ws/src/feature_detector/in/scene.jpg", CV_LOAD_IMAGE_GRAYSCALE); 
-    cv::Mat scene_desc; points scene_kpts;
-    detector->detectAndCompute(scene, cv::noArray(), scene_kpts, scene_desc);
+    cv::Mat scene_descs; points scene_kpts;
+    detector->detectAndCompute(scene, cv::noArray(), scene_kpts, scene_descs);
 
     if(debug){
         cv::Mat output;
         cv::drawKeypoints(scene, scene_kpts, output);
         cv::imshow("/home/tanay/catkin_ws/src/feature_detector/out/scene_kpts", output);
-        cv::waitKey(0);
+        while(cv::waitKey(5) != 'q');
     }
     
-    std::vector<double> delta_dist_temp;
-    std::vector<std::vector<double> > delta_dist;
-    std::vector<std::vector<std::vector<double> > > dist_mat;
-    double temp_sum_sq = 0;
+    cv::FlannBasedMatcher matcher = cv::FlannBasedMatcher(cv::makePtr<cv::flann::KDTreeIndexParams>(5));
+    nn_match matches;
+    matcher.knnMatch(obj_descs, scene_descs, matches, 2);
+    // how will you display matches from multiple images?
 
-    for(int i=0;i<scene_desc.rows;i++)
-    {
-        delta_dist.clear();
-        delta_dist.shrink_to_fit();
-        for(int j=0;j<n;j++)
-        {
-            delta_dist_temp.clear();
-            delta_dist_temp.shrink_to_fit();
-            for(int k=0;k<descriptors.at(j).rows;k++)
-            {
-                temp_sum_sq = 0;
-                for(int l=0;l<128;l++)
-                {
-                    temp_sum_sq += pow(scene_desc.at<float>(i, l) - descriptors.at(j).at<float>(k, l),2);
-                }
-                if(temp_sum_sq < 10E3)
-                {
-                    echo(i);
-                    echo(j);
-                    echo(k);
-                }
-                delta_dist_temp.push_back(sqrt(temp_sum_sq));
-            }
-            delta_dist.push_back(delta_dist_temp);
+    match good_matches;
+    for(int i=0; i<matches.size(); i++){
+        if(matches[i][0].distance < 0.7*matches[i][1].distance){
+            good_matches.push_back(matches[i][0]);
         }
-        dist_mat.push_back(delta_dist);
     }
 
-    std::vector<cv::KeyPoint> key(7);
-    key[0] = scene_kpts.at(9);
-    key[1] = scene_kpts.at(35);
-    key[2] = scene_kpts.at(37);
-    key[3] = scene_kpts.at(94);
-    key[4] = scene_kpts.at(52);
-    key[5] = scene_kpts.at(53);
-    key[6] = scene_kpts.at(92);
+    std::vector<cv::Point2f> obj, scene_pts;
+    for(int i=0; i<good_matches.size(); i++){
+        obj.push_back(obj_kpts[good_matches[i].queryIdx].pt);
+        scene_pts.push_back(scene_kpts[good_matches[i].trainIdx].pt);
+    }
 
-    cv::Mat output;
-    cv::drawKeypoints(scene, key, output);
-    cv::imshow("BRUHHH", output);
-    cv::waitKey(0);
-    // echo(dist_mat.size());
-    // for(int i=0;i<n;i++)
-    // {
-    //     for(int j=0;j<descriptors.at(i).rows;j++)
-    //     {
-    //         temp_sum_sq = 0;
-    //         for(int k=0;k<descriptors.at(i).cols;k++)
-    //         {
-    //             temp_sum_sq += (scene_desc.at<float>(j, k) - descriptors.at(i).at<float>(j, k))*(scene_desc.at<float>(j, k) - descriptors.at(i).at<float>(j, k));
-    //         }
-    //         std::cout << temp_sum_sq << std::endl;
-    //         delta_dist.at<float>(i, j) = sqrt(temp_sum_sq);
-    //         std::cout << "1 iteration" << std::endl;
-    //     }
-    // }
+    cv::Mat H = cv::findHomography(obj, scene_pts, CV_RANSAC);
+    std::vector<cv::Point2f> obj_corners(4), scene_corners(4);
+    obj_corners[0] = cv::Point(0,0);
+    obj_corners[1] = cv::Point(scene.cols, 0);
+    obj_corners[2] = cv::Point(scene.cols, scene.rows);
+    obj_corners[3] = cv::Point(0, scene.rows); 
+    cv::perspectiveTransform(obj_corners, scene_corners, H);
+
+    cv::Scalar color(0,255,0);
+    line(scene, scene_corners[0], scene_corners[1], color, 4);
+    line(scene, scene_corners[1], scene_corners[2], color, 4); 
+    line(scene, scene_corners[2], scene_corners[3], color, 4);
+    line(scene, scene_corners[3], scene_corners[0], color, 4);
+    
+    cv::imwrite("out/image.jpg", scene);
+
 }
