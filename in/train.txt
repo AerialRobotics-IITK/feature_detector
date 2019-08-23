@@ -1,1 +1,4 @@
-object.jpg
+object1.jpg
+object2.jpg
+object3.jpg
+object4.jpg

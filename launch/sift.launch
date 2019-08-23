@@ -2,5 +2,6 @@
 <launch>
     <node pkg="feature_detector" type="sift" name="sift" output="screen" respawn="false" respawn_delay="0">
         <rosparam file="$(find feature_detector)/cfg/sift.yaml" command="load" ns="" />
+        <remap from="image_raw" to="image_raw" />
     </node>
 </launch>

@@ -17,14 +17,14 @@ include_directories(${OpenCV_INCLUDE_DIRS})
 cs_add_executable(flann_sift src/flann_sift.cxx)
 target_link_libraries(flann_sift ${catkin_LIBRARIES} ${OpenCV_LIBRARIES} opencv_xfeatures2d)
 
-cs_add_executable(sift src/sift.cxx)
-target_link_libraries(sift ${catkin_LIBRARIES} ${OpenCV_LIBRARIES} opencv_xfeatures2d)
+cs_add_executable(sample src/sample.cxx)
+target_link_libraries(sample ${catkin_LIBRARIES} ${OpenCV_LIBRARIES} opencv_xfeatures2d)
 
 cs_add_executable(knn_sift src/knn_sift.cxx)
 target_link_libraries(knn_sift ${catkin_LIBRARIES} ${OpenCV_LIBRARIES} opencv_xfeatures2d)
 
-cs_add_executable(sample src/sample.cxx)
-target_link_libraries(sample ${catkin_LIBRARIES} ${OpenCV_LIBRARIES} opencv_xfeatures2d)
+cs_add_executable(sift src/sift.cxx)
+target_link_libraries(sift ${catkin_LIBRARIES} ${OpenCV_LIBRARIES} opencv_xfeatures2d)
 
 cs_install()
 cs_export()
