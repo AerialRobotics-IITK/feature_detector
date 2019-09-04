@@ -1,3 +1,10 @@
-images: 3
+images: 7
+objects: 2
+objectIDs: [0,0,0,0,0,0,1]
 debug: true
 stream: true
+ratio: 0.7
+minPoints: 6
+path: 
+  train: "sift/train.txt"
+  save: "out"

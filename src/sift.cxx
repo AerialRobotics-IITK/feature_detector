@@ -1,35 +1,4 @@
-#include <ros/ros.h>
-#include <sensor_msgs/Image.h>
-#include <cv_bridge/cv_bridge.h>
-#include <nav_msgs/Odometry.h>
-#include <opencv-3.3.1-dev/opencv2/highgui/highgui.hpp>
-#include <opencv-3.3.1-dev/opencv2/features2d/features2d.hpp>
-#include <opencv-3.3.1-dev/opencv2/core/core.hpp>
-#include <opencv-3.3.1-dev/opencv2/imgproc/imgproc.hpp>
-#include <opencv-3.3.1-dev/opencv2/objdetect/objdetect.hpp>
-#include <opencv-3.3.1-dev/opencv2/xfeatures2d.hpp>
-#include <opencv-3.3.1-dev/opencv2/opencv.hpp>
-#include <opencv-3.3.1-dev/opencv2/opencv_modules.hpp>
-
-// #include "opencv2/contrib/contrib.hpp"/
-
-#include <iostream>
-#include <fstream>
-#define check(X) cout << X << endl
-
-using namespace cv;
-using namespace std;
-
-const string defaultDetectorType = "SIFT";
-// const string defaultDescriptorType = "SIFT";
-const string defaultMatcherType = "FlannBased";
-const string defaultQueryImageName = "in/scene.jpg";
-const string defaultFileWithTrainImages = "in/train.txt";
-const string defaultDirToSaveResImages = "out";
-
-int sceneID = 0, numTrainImages = 0;
-bool debug = true, stream = true;
-cv::Mat queryImage, markedImage;
+#include <feature_detector/sift.h>
 
 static void imageCb(const sensor_msgs::Image msg)
 {
@@ -45,310 +14,198 @@ static void imageCb(const sensor_msgs::Image msg)
     }
     
     markedImage = cv_ptr->image;
-    cvtColor(markedImage, queryImage, COLOR_BGR2GRAY);
+    cv::cvtColor(markedImage, queryImage, cv::COLOR_BGR2GRAY);
+    greyedImage = queryImage;
     sceneID = msg.header.seq;
     return;
 }
 
-// static void printPrompt( const string& applName )
-// {
-//   ROS_INFO("/*\n * This is a sample on matching descriptors detected on one image to descriptors detected in image set.\n
-                    // * So we have one query image and several train images. For each keypoint descriptor of query image\n
-                    // * the one nearest train descriptor is found the entire collection of train images. To visualize the result\n
-                    // * of matching we save images, each of which combines query and train image with matches between them (if they exist).\n
-                    // * Match is drawn as line between corresponding points. Count of all matches is equel to count of\n
-                    // * query keypoints, so we have the same count of lines in all set of result images (but not for each result\n
-                    // * (train) image).\n
-                    // */\n\n");
-
-//   ROS_INFO("Format:\n\n");
-//   ROS_INFO("./%s [detectorType] [descriptorType] [matcherType] [queryImage] [fileWithTrainImages] [dirToSaveResImages]\n", applName);
-
-//   ROS_INFO("\nExample:\n ./%s %s %s %s %s %s %s", applName, defaultDetectorType, defaultDescriptorType, defaultMatcherType, 
-                                                // defaultQueryImageName, defaultFileWithTrainImages, defaultDirToSaveResImages )
-// }
-
-static void maskMatchesByTrainImgIdx( const vector<DMatch>& matches, int trainImgIdx, vector<char>& mask )
+static void findBestImages( const std::vector<cv::Mat>& trainImages, const std::vector<cv::DMatch>& matches )
 {
-    mask.resize( matches.size() );
-    fill( mask.begin(), mask.end(), 0 );
-    for( size_t i = 0; i < matches.size(); i++ )
+    numMatches.clear();
+    bestImages.clear(); int matchNum[numTrainImages]; int imgNum = 0;
+    for(int i = 0; i < numTrainImages; i++) matchNum[i] = 0;
+    for(int i = 0; i < matches.size(); i++)
     {
-        if( matches[i].imgIdx == trainImgIdx )
-            mask[i] = 1;
+        imgNum = matches[i].imgIdx;
+        matchNum[imgNum] = matchNum[imgNum] + 1;
     }
-}
-
-static void readTrainFilenames( const string& filename, string& dirName, vector<string>& trainFilenames )
-{
-    trainFilenames.clear();
-
-    ifstream file( filename.c_str() );
-    if ( !file.is_open() )
-        return;
-
-    size_t pos = filename.rfind('\\');
-    char dlmtr = '\\';
-    if (pos == String::npos)
+    // printf("%d %d match\n", matchNum[0], matchNum[1]);
+    for(int i = 0; i < numTrainImages; i++) numMatches.push_back(matchNum[i]);
+    int objID = imageIDs[0], idx = 0, i = 0, maxMatches = 0;
+    std::vector<int> imgMatches;
+    while(i < numTrainImages)
     {
-        pos = filename.rfind('/');
-        dlmtr = '/';
-    }
-    dirName = pos == string::npos ? "" : filename.substr(0, pos) + dlmtr;
-
-    while( !file.eof() )
-    {
-        string str; getline( file, str );
-        if( str.empty() ) break;
-        trainFilenames.push_back(str);
-    }
-    file.close();
-}
-
-static bool createDetectorDescriptorMatcher( 
-                                      const string& matcherType,
-                                      Ptr<Feature2D>& detector,
-                                      Ptr<DescriptorMatcher>& descriptorMatcher )
-{
-    // ROS_INFO("< Creating feature detector, descriptor extractor and descriptor matcher ...\n");
-    // featureDetector = FeatureDetector::create( detectorType );
-    // descriptorExtractor = DescriptorExtractor::create( descriptorType );
-    detector = xfeatures2d::SIFT::create();
-    descriptorMatcher = DescriptorMatcher::create( matcherType );
-
-    bool isCreated = !( detector.empty() || descriptorMatcher.empty() );
-    if( !isCreated )    ROS_ERROR("Can not create feature detector or descriptor extractor or descriptor matcher of given types.\n");
-
-    return isCreated;
-}
-
-static bool readTrainImages( const string& trainFilename, vector <Mat>& trainImages, vector<string>& trainImageNames )
-{
-    // ROS_INFO("< Reading the images...\n");
-    // queryImage = imread( queryImageName, CV_LOAD_IMAGE_GRAYSCALE);
-    // if( queryImage.empty() )
-    // {
-        // ROS_ERROR("Query image can not be read. \n");
-        // return false;
-    // }
-    string trainDirName;
-    readTrainFilenames( trainFilename, trainDirName, trainImageNames );
-    if( trainImageNames.empty() )
-    {
-        ROS_ERROR("Train image filenames can not be read.>\n");
-        return false;
-    }
-    int readImageCount = 0;
-    for( size_t i = 0; i < trainImageNames.size(); i++ )
-    {
-        string filename = trainDirName + trainImageNames[i];
-        Mat img = imread( filename, CV_LOAD_IMAGE_GRAYSCALE );
-        if( img.empty() ) ROS_ERROR("Train image can not be read.\n");
-        else readImageCount++;
-        trainImages.push_back( img );
-    }
-    if( !readImageCount )
-    {
-        ROS_ERROR("All train images can not be read.>\n");
-        return false;
-    }
-    // else ROS_INFO("%d train images were read.\n", readImageCount);
-    return true;
-}
-
-static void detectAndComputeTrainKeypoints( const vector<Mat>& trainImages, vector<vector<KeyPoint> >& trainKeypoints, 
-                                    vector<Mat>& trainDescriptors, Ptr<Feature2D>& detector )
-{
-    //   ROS_INFO("< Computing descriptors for training images...\n");
-    detector->detect( trainImages, trainKeypoints );
-    detector->compute( trainImages, trainKeypoints, trainDescriptors); 
-    int totalTrainDesc = 0;
-    if(debug)
-    {
-        for( vector<Mat>::const_iterator tdIter = trainDescriptors.begin(); tdIter != trainDescriptors.end(); tdIter++ )
-            totalTrainDesc += tdIter->rows;
-        ROS_INFO("Total train descriptors count: %d", totalTrainDesc );
-    }
-}
-
-static void detectAndComputeQueryKeypoints( const Mat& queryImage, vector<KeyPoint>& queryKeypoints,
-                                    Mat& queryDescriptors, Ptr<Feature2D> detector)
-{
-    //   ROS_INFO("< Computing descriptors for query image...\n");
-    detector->detectAndCompute( queryImage, noArray(), queryKeypoints, queryDescriptors );
-    if(debug) ROS_INFO("Query descriptors count: %d", queryDescriptors.rows );
-}
-
-// static void detectKeypoints( const Mat& queryImage, vector<KeyPoint>& queryKeypoints,
-//                       const vector<Mat>& trainImages, vector<vector<KeyPoint> >& trainKeypoints,
-//                       Ptr<FeatureDetector>& featureDetector )
-// {
-    // ROS_INFO("< Extracting keypoints from images...\n");
-//     featureDetector->detect( queryImage, queryKeypoints );
-    // featureDetector->detect( trainImages, trainKeypoints );
-// }
-
-// static void computeDescriptors( const Mat& queryImage, vector<KeyPoint>& queryKeypoints, Mat& queryDescriptors,
-//                          const vector<Mat>& trainImages, vector<vector<KeyPoint> >& trainKeypoints, vector<Mat>& trainDescriptors,
-//                          Ptr<DescriptorExtractor>& descriptorExtractor )
-// {
-//     ROS_INFO("< Computing descriptors for keypoints...\n");
-//     descriptorExtractor->compute( queryImage, queryKeypoints, queryDescriptors );
-//     descriptorExtractor->compute( trainImages, trainKeypoints, trainDescriptors );
-
-//     int totalTrainDesc = 0;
-//     for( vector<Mat>::const_iterator tdIter = trainDescriptors.begin(); tdIter != trainDescriptors.end(); tdIter++ )
-//         totalTrainDesc += tdIter->rows;
-
-//      ROS_INFO("Query descriptors count: %d; Total train descriptors count: %d", queryDescriptors.rows, totalTrainDesc );
-// }
-
-static void matchDescriptors( const Mat& queryDescriptors, const vector<Mat>& trainDescriptors,
-                       vector<DMatch>& matches, Ptr<DescriptorMatcher>& descriptorMatcher )
-{
-    // ROS_INFO("< Set train descriptors collection in the matcher and match query descriptors to them...\n");
-    TickMeter tm;
-    vector<vector<DMatch>> nn_matches;
-
-    tm.start();
-    descriptorMatcher->add( trainDescriptors );
-    descriptorMatcher->train();
-    tm.stop();
-    double buildTime = tm.getTimeMilli();
-
-    tm.start();
-    descriptorMatcher->knnMatch( queryDescriptors, nn_matches, 2);
-    tm.stop();
-    double matchTime = tm.getTimeMilli();
-
-    for(int i=0; i<nn_matches.size(); i++){
-        if(nn_matches[i][0].distance < nn_matches[i][1].distance){
-            matches.push_back(nn_matches[i][0]);
+        // add && imageIDs[i] == objID for best image of each type
+        while(i < numTrainImages)
+        {
+            if(maxMatches < matchNum[i])
+            {
+                maxMatches = matchNum[i];
+                idx = i;
+            }
+            objID = imageIDs[i]; i++;
         }
+        // printf("%d %d find\n", idx, maxMatches);
+        imgMatches.clear();
+        for(int j = 0; j < matches.size(); j++) if(matches[j].imgIdx == idx) imgMatches.push_back(j);
+        // printf("%d bef\n", bestImages.size());
+        bestImages.push_back(imgData(trainImages[idx].cols, trainImages[idx].rows, idx, imgMatches));
+        // printf("%d aft\n", bestImages.size());
+        objID = imageIDs[i]; maxMatches = 0;
     }
-
-    CV_Assert( queryDescriptors.rows >= (int)matches.size() || matches.empty() );
-
-    // ROS_INFO("Number of matches: %d", matches.size() );
-    // ROS_INFO("Build time: %lf ms; Match time: %lf ms\n", buildTime, matchTime);
-
-    // ROS_INFO("%d\n", queryDescriptors.rows);
-    // for(int i=0; i<trainDescriptors.size(); i++){
-        // ROS_INFO("%d\n", trainDescriptors[i].rows);
-    // }
-    // for(int i=0; i< matches.size(); i++)
-    // {
-        // ROS_INFO("%lf %d %d %d\n", matches[i].distance, matches[i].imgIdx, matches[i].queryIdx, matches[i].trainIdx);
-    // }
+    return;
 }
 
-static void markHomographies( const Mat& markedImage, const vector<Mat>& trainImages, const vector<KeyPoint>& queryKeypoints, 
-                        const vector<vector<KeyPoint>>& trainKeypoints, const vector<DMatch>& matches )
+static void findHomographies( const std::vector<cv::KeyPoint>& queryKeypoints, const std::vector<std::vector<cv::KeyPoint>>& trainKeypoints, 
+                                                                        const std::vector<cv::DMatch>& matches )
 {
-    Scalar color(0, 255, 0); vector<Point2f> objCorners(4), sceneCorners(4), objPoints, scenePoints;
-    for(int i=0; i<trainImages.size(); i++)
+    std::vector<cv::Point2f> objCorners(4), sceneCorners(4), objPoints, scenePoints;
+    std::vector<cv::KeyPoint> matchPoints;
+    objects.clear(); objectIDs.clear();
+    for(int i=0; i < bestImages.size(); i++)
     {
         objPoints.clear(); scenePoints.clear();
-        for(int j=0; j<matches.size(); j++)
+        for(int j=0; j < bestImages[i].matchIdxs.size(); j++)
         {
-            if(matches[j].imgIdx != i) continue;
-            objPoints.push_back(trainKeypoints[i][matches[j].trainIdx].pt);
-            scenePoints.push_back(queryKeypoints[matches[j].queryIdx].pt);
+            // if(matches[bestImages[i].matchIdxs[j]].imgIdx != bestImages[i].idx) ROS_ERROR("SoMeThinG wEnt WrOng!");
+            objPoints.push_back(trainKeypoints[bestImages[i].idx][matches[bestImages[i].matchIdxs[j]].trainIdx].pt);
+            scenePoints.push_back(queryKeypoints[matches[bestImages[i].matchIdxs[j]].queryIdx].pt);
+            if(debug) matchPoints.push_back(queryKeypoints[matches[bestImages[i].matchIdxs[j]].queryIdx]);
         }
         // ROS_INFO("%d %d\n", objPoints.size(), scenePoints.size());
-        if(objPoints.size() < 4 || scenePoints.size() < 4) continue;
-        Mat H = findHomography(objPoints, scenePoints, CV_RANSAC);
+        // numMatches.push_back(objPoints.size());
+        // if(objPoints.size() != numMatches[bestImages[i].idx] || scenePoints.size() != numMatches[bestImages[i].idx]) ROS_ERROR("NOpe");
+        if(objPoints.size() < min_points || scenePoints.size() < min_points) continue;
+        cv::Mat H = cv::findHomography(objPoints, scenePoints, CV_RANSAC, 4);
         
-        objCorners[0] = Point(0, 0); 
-        objCorners[1] = Point(trainImages[i].cols, 0);
-        objCorners[2] = Point(trainImages[i].cols, trainImages[i].rows);
-        objCorners[3] = Point(0, trainImages[i].rows);
-        perspectiveTransform(objCorners, sceneCorners, H);
+        if(H.empty()) continue;
+        objCorners[0] = cv::Point(0, 0); 
+        objCorners[1] = cv::Point(bestImages[i].cols, 0);
+        objCorners[2] = cv::Point(bestImages[i].cols, bestImages[i].rows);
+        objCorners[3] = cv::Point(0, bestImages[i].rows);
+        cv::perspectiveTransform(objCorners, sceneCorners, H);
 
-        line(markedImage, sceneCorners[0], sceneCorners[1], color, 4);
-        line(markedImage, sceneCorners[1], sceneCorners[2], color, 4); 
-        line(markedImage, sceneCorners[2], sceneCorners[3], color, 4);
-        line(markedImage, sceneCorners[3], sceneCorners[0], color, 4);
+        std::array<cv::Point2f, 4> corners;
+        for(int n = 0; n < 4; n++) corners[n] = sceneCorners[n];
+        // printf("%lf %lf %lf %lf -1\n", sceneCorners[0].x, sceneCorners[1].x, sceneCorners[2].x, sceneCorners[3].x);
+        // printf("%lf %lf %lf %lf 1\n", corners[0].y, corners[1].y, corners[2].y, corners[3].y);
+        // printf("%d bef\n", objects.size());
+        objects.push_back(corners);
+        // printf("%d aft\n", objects.size());
+        objectIDs.push_back(bestImages[i].idx);
     }
+
+    if(debug) cv::drawKeypoints(queryImage, matchPoints, keyedImage);
+    return;
 }
 
-static void saveResultImages( const Mat& queryImage, const vector<KeyPoint>& queryKeypoints,
-                       const vector<Mat>& trainImages, const vector<vector<KeyPoint> >& trainKeypoints,
-                       const vector<DMatch>& matches, const vector<string>& trainImagesNames, const string& resultDir )
+static void markHomographies( const cv::Mat& markedImage )
 {
-    ROS_INFO("Save results...\n");
-    Mat drawImg;
-    vector<char> mask;
-    for( size_t i = 0; i < trainImages.size(); i++ )
-    {
-        if( !trainImages[i].empty() )
-        {
-            maskMatchesByTrainImgIdx( matches, (int)i, mask );
-            drawMatches( queryImage, queryKeypoints, trainImages[i], trainKeypoints[i],
-                         matches, drawImg, Scalar(255, 0, 0), Scalar(0, 255, 255), mask );
-            string filename = resultDir + "/res_" + trainImagesNames[i];
-            if( !imwrite( filename, drawImg ) )
-              ROS_ERROR("Image %s can not be saved (may be because directory %s does not exist).\n", filename, resultDir);
+    double cent_x = 0, cent_y = 0;
+    centres.clear();
+    for(int i=0; i<objects.size(); i++){
+        cv::Scalar color((16*i)%255, 255, (32*i)%255);
+        cent_x = cent_y = 0;
+        for(int n = 0; n < 4; n++){
+            cent_x += objects[i][n].x;
+            cent_y += objects[i][n].y;
         }
+        cv::Point centre(cent_x/4, cent_y/4);
+        centres.push_back(centre);
+        cv::line(markedImage, objects[i][0], objects[i][1], color, 4);
+        cv::line(markedImage, objects[i][1], objects[i][2], color, 4); 
+        cv::line(markedImage, objects[i][2], objects[i][3], color, 4);
+        cv::line(markedImage, objects[i][3], objects[i][0], color, 4);
+        cv::circle(markedImage, centre, 2, (255,0,0), -1);
+        cv::putText(markedImage, std::to_string(objectIDs[i]), centre, cv::FONT_HERSHEY_SIMPLEX, 2, color, 4);
     }
 }
 
 int main(int argc, char** argv)
 {
     ros::init(argc, argv, "sifter");
-    ros::NodeHandle nh;
+    ros::NodeHandle nh, ph("~");
     ros::Rate loopRate(10);
 
-    nh.getParam("images", numTrainImages);
-    nh.getParam("debug", debug);
-    nh.getParam("stream", stream);
+    // std::string detectorType = defaultDetectorType;
+    // std::string matcherType = defaultMatcherType;
+    // std::string descriptorType = defaultDescriptorType;
+    std::string queryImageName = defaultQueryImageName;
+    std::string fileWithTrainImages = defaultFileWithTrainImages;
+    std::string dirToSaveResImages = defaultDirToSaveResImages;
+    
+    ph.getParam("ratio", ratio);
+    ph.getParam("images", numTrainImages);
+    // printf("%d", numTrainImages);
+    ph.getParam("debug", debug);
+    ph.getParam("minPoints", min_points);
+    ph.getParam("stream", stream);
+    ph.getParam("path/train", fileWithTrainImages);
+    ph.getParam("path/save", dirToSaveResImages);
+    ph.getParam("objects", numObjects);
+    ph.getParam("objectIDs", imageIDs);
 
     ros::Subscriber imgSub = nh.subscribe("image_raw", 1, imageCb);
     ros::Publisher imgPub = nh.advertise<sensor_msgs::Image>("marked_image", 1);
+    ros::Publisher keyPub = nh.advertise<sensor_msgs::Image>("keyed_image", 1);
+    ros::Publisher matchPub = nh.advertise<std_msgs::Int32MultiArray>("matches", 1);
+    ros::Publisher countPub = nh.advertise<std_msgs::Int32>("keypoints", 1);
+    ros::Publisher greyPub = nh.advertise<sensor_msgs::Image>("greyed_image", 1);
 
-    string detectorType = defaultDetectorType;
-    string matcherType = defaultMatcherType;
-    string fileWithTrainImages = defaultFileWithTrainImages;
-    // string descriptorType = defaultDescriptorType;
-    string queryImageName = defaultQueryImageName;
-    string dirToSaveResImages = defaultDirToSaveResImages;
 
-    // Ptr<FeatureDetector> featureDetector;
-    // Ptr<DescriptorExtractor> descriptorExtractor;
-    Ptr<Feature2D> detector; Ptr<DescriptorMatcher> descriptorMatcher;
-    if( !createDetectorDescriptorMatcher( matcherType, detector, descriptorMatcher ) )  return -1;
+    // cv::Ptr<cv::FeatureDetector> featureDetector;
+    // cv::Ptr<cv::DescriptorExtractor> descriptorExtractor;
+    cv::Ptr<cv::Feature2D> detector = cv::xfeatures2d::SIFT::create();
+    cv::FlannBasedMatcher matcher = cv::FlannBasedMatcher(cv::makePtr<cv::flann::KDTreeIndexParams>(5));
+    std::vector<std::array<cv::Point2f, 4> > objects; std::vector<cv::Point> centres;
 
-    vector<Mat> trainImages; vector<string> trainImagesNames;
+    // if( !createDetectorDescriptorMatcher( matcherType, detector, descriptorMatcher ) )  return -1;
+
+    std::vector<cv::Mat> trainImages; std::vector<std::string> trainImagesNames;
     if( !readTrainImages( fileWithTrainImages, trainImages, trainImagesNames ) ) return -1;
 
-    vector<vector<KeyPoint> > trainKeypoints; vector<Mat> trainDescriptors;
+    // printf("%d in \n", trainImages.size());
+
+    std::vector<std::vector<cv::KeyPoint>> trainKeypoints; std::vector<cv::Mat> trainDescriptors;
     detectAndComputeTrainKeypoints( trainImages, trainKeypoints, trainDescriptors, detector );
 
-    vector<KeyPoint> queryKeypoints; Mat queryDescriptors; vector<DMatch> matches;
+    std::vector<cv::KeyPoint> queryKeypoints; cv::Mat queryDescriptors; std::vector<cv::DMatch> matches;
     if(!stream) 
     {
-        queryImage = imread( queryImageName, CV_LOAD_IMAGE_GRAYSCALE);
-        markedImage = imread( queryImageName ); 
-        detectAndComputeQueryKeypoints( queryImage, queryKeypoints, queryDescriptors, detector );
-        matchDescriptors( queryDescriptors, trainDescriptors, matches, descriptorMatcher );
-        markHomographies( markedImage, trainImages, queryKeypoints, trainKeypoints, matches);
-        imwrite("out/marked.jpg", markedImage);
-        saveResultImages( queryImage, queryKeypoints, trainImages, trainKeypoints,
-                      matches, trainImagesNames, dirToSaveResImages );
+        // queryImage = cv::imread( queryImageName, CV_LOAD_IMAGE_GRAYSCALE);
+        // markedImage = cv::imread( queryImageName ); 
+        // detectAndComputeQueryKeypoints( queryImage, queryKeypoints, queryDescriptors, detector );
+        // matchDescriptors( queryDescriptors, trainDescriptors, matches, matcher );
+        // markHomographies( markedImage, trainImages, queryKeypoints, trainKeypoints, matches);
+        // cv::imwrite("out/marked.jpg", markedImage);
+        // saveResultImages( queryImage, queryKeypoints, trainImages, trainKeypoints,
+                    //   matches, trainImagesNames, dirToSaveResImages );
     }
     else
     {
+        // check(0);
         while(ros::ok())
         {
             while(sceneID == 0) ros::spinOnce();
+            // check(1);
             detectAndComputeQueryKeypoints( queryImage, queryKeypoints, queryDescriptors, detector );
-            matchDescriptors( queryDescriptors, trainDescriptors, matches, descriptorMatcher );
-            markHomographies( markedImage, trainImages, queryKeypoints, trainKeypoints, matches);
+            matchDescriptors( queryDescriptors, trainDescriptors, matches, matcher );
+            findBestImages( trainImages, matches );
+            findHomographies( queryKeypoints, trainKeypoints, matches );
+            markHomographies( markedImage );
             sensor_msgs::ImagePtr msg = cv_bridge::CvImage(std_msgs::Header(), "bgr8", markedImage).toImageMsg();
-            imgPub.publish(msg);
+            sensor_msgs::ImagePtr key_msg = cv_bridge::CvImage(std_msgs::Header(), "bgr8", keyedImage).toImageMsg();
+            sensor_msgs::ImagePtr grey_msg = cv_bridge::CvImage(std_msgs::Header(), "mono8", greyedImage).toImageMsg();
+            std_msgs::Int32MultiArray match_msg; std_msgs::Int32 keypts_msg;
+            keypts_msg.data = queryPoints;
+            for(int i = 0; i < numMatches.size(); i++) match_msg.data.push_back(numMatches[i]); greyPub.publish(grey_msg);
+            imgPub.publish(msg), keyPub.publish(key_msg), countPub.publish(keypts_msg), matchPub.publish(match_msg);
+            // queryKeypoints.clear(), matches.clear(), numMatches.clear();
             ros::spinOnce();
             loopRate.sleep();
         }
     }
+
     return 0;
 }
