@@ -69,6 +69,10 @@
   <exec_depend>nav_msgs</exec_depend>
   <exec_depend>roscpp</exec_depend>
   <exec_depend>std_msgs</exec_depend>
+  <depend>tf</depend>
+  <depend>tf_conversions</depend>
+  <depend>eigen_conversions</depend>
+  <depend>mav_utils_msgs</depend>
 
 
   <!-- The export tag contains other, unspecified, tags -->

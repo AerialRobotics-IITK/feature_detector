@@ -13,12 +13,16 @@ static void imageCb(const sensor_msgs::Image msg)
         return;
     }
     
-    markedImage = cv_ptr->image;
-    cv::cvtColor(markedImage, queryImage, cv::COLOR_BGR2GRAY);
-    greyedImage = queryImage;
     sceneID = msg.header.seq;
-    return;
+    if(debug)
+    {
+        markedImage = cv_ptr->image;
+        cv::cvtColor(markedImage, queryImage, cv::COLOR_BGR2GRAY);
+        greyedImage = queryImage;
+    }
 }
+
+static void odomCb(const nav_msgs::Odometry msg){ odom = msg; }
 
 static void findBestImages( const std::vector<cv::Mat>& trainImages, const std::vector<cv::DMatch>& matches )
 {
@@ -57,6 +61,33 @@ static void findBestImages( const std::vector<cv::Mat>& trainImages, const std::
     return;
 }
 
+bool sizeCheck( const std::array<cv::Point2f, 4> corners, int id)
+{
+    areas.clear(); bool lengthPassed = true;
+    double lx = 0, ly = 0;
+
+    lx = fabs(corners.at(1).x - corners.at(0).x) + fabs(corners.at(2).x - corners.at(3).x);
+    ly = fabs(corners.at(3).y - corners.at(0).y) + fabs(corners.at(2).y - corners.at(1).y);
+
+    lengthPassed = (fabs(bestImages[id].rows - lx/2) <= lengthError) && (fabs(bestImages[id].cols - ly/2) <= lengthError);
+
+    if(!sizeCheckFlag) return lengthPassed;
+    else
+    {
+        double area = 0;
+        bool sizePassed = true;
+        for(int i=0; i<4; i++)
+        {
+           area += corners.at(i%4).x * corners.at((i+1)%4).y;
+           area -= corners.at(i%4).y * corners.at((i+1)%4).x;
+        }
+        area = fabs(area/2);
+        sizePassed = (fabs(area - pixelSizes[bestImages[id].idx]) <= sizeError);
+        if(sizePassed && lengthPassed) areas.push_back(area);
+        return sizePassed && lengthPassed;
+    }
+}
+
 static void findHomographies( const std::vector<cv::KeyPoint>& queryKeypoints, const std::vector<std::vector<cv::KeyPoint>>& trainKeypoints, 
                                                                         const std::vector<cv::DMatch>& matches )
 {
@@ -91,120 +122,106 @@ static void findHomographies( const std::vector<cv::KeyPoint>& queryKeypoints, c
         // printf("%lf %lf %lf %lf -1\n", sceneCorners[0].x, sceneCorners[1].x, sceneCorners[2].x, sceneCorners[3].x);
         // printf("%lf %lf %lf %lf 1\n", corners[0].y, corners[1].y, corners[2].y, corners[3].y);
         // printf("%d bef\n", objects.size());
-        objects.push_back(corners);
-        // printf("%d aft\n", objects.size());
-        objectIDs.push_back(bestImages[i].idx);
+        if(sizeCheck(corners, i))
+        {
+            objects.push_back(corners);
+            // printf("%d aft\n", objects.size());
+            objectIDs.push_back(bestImages[i].idx);
+        }
     }
 
     if(debug) cv::drawKeypoints(queryImage, matchPoints, keyedImage);
     return;
 }
 
-static void markHomographies( const cv::Mat& markedImage )
+static void findCentres()
 {
     double cent_x = 0, cent_y = 0;
     centres.clear();
-    for(int i=0; i<objects.size(); i++){
-        cv::Scalar color((16*i)%255, 255, (32*i)%255);
+    for(int i=0; i<objects.size(); i++)
+    {
         cent_x = cent_y = 0;
-        for(int n = 0; n < 4; n++){
+        for(int n = 0; n < 4; n++)
+        {
             cent_x += objects[i][n].x;
             cent_y += objects[i][n].y;
         }
-        cv::Point centre(cent_x/4, cent_y/4);
+        cv::Point2f centre(cent_x/4.0, cent_y/4.0);
         centres.push_back(centre);
+    }
+}
+
+static void markHomographies( const cv::Mat& markedImage )
+{
+    for(int i=0; i<objects.size(); i++)
+    {
+        cv::Scalar color((16*i)%255, 255, (32*i)%255);
         cv::line(markedImage, objects[i][0], objects[i][1], color, 4);
         cv::line(markedImage, objects[i][1], objects[i][2], color, 4); 
         cv::line(markedImage, objects[i][2], objects[i][3], color, 4);
         cv::line(markedImage, objects[i][3], objects[i][0], color, 4);
-        cv::circle(markedImage, centre, 2, (255,0,0), -1);
-        cv::putText(markedImage, std::to_string(objectIDs[i]), centre, cv::FONT_HERSHEY_SIMPLEX, 2, color, 4);
+        cv::circle(markedImage, centres[i], 2, (255,0,0), -1);
+        cv::putText(markedImage, std::to_string(objectIDs[i]), centres[i], cv::FONT_HERSHEY_SIMPLEX, 2, color, 4);
     }
 }
 
 int main(int argc, char** argv)
 {
     ros::init(argc, argv, "sifter");
-    ros::NodeHandle nh, ph("~");
+    ros::NodeHandle sh, ph("~");
     ros::Rate loopRate(10);
 
-    // std::string detectorType = defaultDetectorType;
-    // std::string matcherType = defaultMatcherType;
-    // std::string descriptorType = defaultDescriptorType;
-    std::string queryImageName = defaultQueryImageName;
-    std::string fileWithTrainImages = defaultFileWithTrainImages;
-    std::string dirToSaveResImages = defaultDirToSaveResImages;
-    
-    ph.getParam("ratio", ratio);
-    ph.getParam("images", numTrainImages);
-    // printf("%d", numTrainImages);
-    ph.getParam("debug", debug);
-    ph.getParam("minPoints", min_points);
-    ph.getParam("stream", stream);
-    ph.getParam("path/train", fileWithTrainImages);
-    ph.getParam("path/save", dirToSaveResImages);
-    ph.getParam("objects", numObjects);
-    ph.getParam("objectIDs", imageIDs);
+    loadParams(ph);
 
-    ros::Subscriber imgSub = nh.subscribe("image_raw", 1, imageCb);
-    ros::Publisher imgPub = nh.advertise<sensor_msgs::Image>("marked_image", 1);
-    ros::Publisher keyPub = nh.advertise<sensor_msgs::Image>("keyed_image", 1);
-    ros::Publisher matchPub = nh.advertise<std_msgs::Int32MultiArray>("matches", 1);
-    ros::Publisher countPub = nh.advertise<std_msgs::Int32>("keypoints", 1);
-    ros::Publisher greyPub = nh.advertise<sensor_msgs::Image>("greyed_image", 1);
+    ros::Subscriber imgSub = sh.subscribe<sensor_msgs::Image>("image_raw", 1, imageCb);
+    ros::Subscriber odomSub = sh.subscribe<nav_msgs::Odometry>("odom", 10, odomCb);
 
+    ros::Publisher imgPub = ph.advertise<sensor_msgs::Image>("marked_image", 1);
+    ros::Publisher keyPub = ph.advertise<sensor_msgs::Image>("keyed_image", 1);
+    ros::Publisher matchPub = ph.advertise<std_msgs::Int32MultiArray>("matches", 1);
+    ros::Publisher countPub = ph.advertise<std_msgs::Int32>("keypoints", 1);
+    ros::Publisher greyPub = ph.advertise<sensor_msgs::Image>("greyed_image", 1);
+    ros::Publisher objPub = sh.advertise<mav_utils_msgs::BBPoses>("object_poses", 1);
 
-    // cv::Ptr<cv::FeatureDetector> featureDetector;
-    // cv::Ptr<cv::DescriptorExtractor> descriptorExtractor;
     cv::Ptr<cv::Feature2D> detector = cv::xfeatures2d::SIFT::create();
     cv::FlannBasedMatcher matcher = cv::FlannBasedMatcher(cv::makePtr<cv::flann::KDTreeIndexParams>(5));
-    std::vector<std::array<cv::Point2f, 4> > objects; std::vector<cv::Point> centres;
-
-    // if( !createDetectorDescriptorMatcher( matcherType, detector, descriptorMatcher ) )  return -1;
 
     std::vector<cv::Mat> trainImages; std::vector<std::string> trainImagesNames;
     if( !readTrainImages( fileWithTrainImages, trainImages, trainImagesNames ) ) return -1;
-
-    // printf("%d in \n", trainImages.size());
 
     std::vector<std::vector<cv::KeyPoint>> trainKeypoints; std::vector<cv::Mat> trainDescriptors;
     detectAndComputeTrainKeypoints( trainImages, trainKeypoints, trainDescriptors, detector );
 
     std::vector<cv::KeyPoint> queryKeypoints; cv::Mat queryDescriptors; std::vector<cv::DMatch> matches;
-    if(!stream) 
+
+    while(ros::ok())
     {
-        // queryImage = cv::imread( queryImageName, CV_LOAD_IMAGE_GRAYSCALE);
-        // markedImage = cv::imread( queryImageName ); 
-        // detectAndComputeQueryKeypoints( queryImage, queryKeypoints, queryDescriptors, detector );
-        // matchDescriptors( queryDescriptors, trainDescriptors, matches, matcher );
-        // markHomographies( markedImage, trainImages, queryKeypoints, trainKeypoints, matches);
-        // cv::imwrite("out/marked.jpg", markedImage);
-        // saveResultImages( queryImage, queryKeypoints, trainImages, trainKeypoints,
-                    //   matches, trainImagesNames, dirToSaveResImages );
-    }
-    else
-    {
-        // check(0);
-        while(ros::ok())
+        while(sceneID == 0 && odom.pose.pose.position.z == 0) ros::spinOnce();
+
+        detectAndComputeQueryKeypoints( queryImage, queryKeypoints, queryDescriptors, detector );
+        matchDescriptors( queryDescriptors, trainDescriptors, matches, matcher );
+        findBestImages( trainImages, matches );
+        findHomographies( queryKeypoints, trainKeypoints, matches );
+        findCentres();
+        if(debug) markHomographies( markedImage );
+
+        mav_utils_msgs::BBPoses pose_msg = findPoses( &centres );
+        pose_msg.imageID = sceneID; pose_msg.stamp = ros::Time::now();
+        if(!pose_msg.object_poses.empty()) objPub.publish(pose_msg);
+
+        if(debug)
         {
-            while(sceneID == 0) ros::spinOnce();
-            // check(1);
-            detectAndComputeQueryKeypoints( queryImage, queryKeypoints, queryDescriptors, detector );
-            matchDescriptors( queryDescriptors, trainDescriptors, matches, matcher );
-            findBestImages( trainImages, matches );
-            findHomographies( queryKeypoints, trainKeypoints, matches );
-            markHomographies( markedImage );
             sensor_msgs::ImagePtr msg = cv_bridge::CvImage(std_msgs::Header(), "bgr8", markedImage).toImageMsg();
             sensor_msgs::ImagePtr key_msg = cv_bridge::CvImage(std_msgs::Header(), "bgr8", keyedImage).toImageMsg();
             sensor_msgs::ImagePtr grey_msg = cv_bridge::CvImage(std_msgs::Header(), "mono8", greyedImage).toImageMsg();
             std_msgs::Int32MultiArray match_msg; std_msgs::Int32 keypts_msg;
             keypts_msg.data = queryPoints;
             for(int i = 0; i < numMatches.size(); i++) match_msg.data.push_back(numMatches[i]); greyPub.publish(grey_msg);
-            imgPub.publish(msg), keyPub.publish(key_msg), countPub.publish(keypts_msg), matchPub.publish(match_msg);
-            // queryKeypoints.clear(), matches.clear(), numMatches.clear();
-            ros::spinOnce();
-            loopRate.sleep();
+            imgPub.publish(msg); keyPub.publish(key_msg); countPub.publish(keypts_msg); matchPub.publish(match_msg);
         }
+
+        ros::spinOnce();
+        loopRate.sleep();
     }
 
     return 0;
