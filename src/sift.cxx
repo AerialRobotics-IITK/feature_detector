@@ -2,27 +2,29 @@
 
 static void imageCb(const sensor_msgs::Image msg)
 {
-    cv_bridge::CvImagePtr cv_ptr;
-    try
-    {
-        cv_ptr = cv_bridge::toCvCopy(msg, sensor_msgs::image_encodings::BGR8);  
-    }
-    catch(cv_bridge::Exception &e)
-    {
-        ROS_ERROR("cv_bridge exception: %s", e.what());
-        return;
-    }
-    
-    sceneID = msg.header.seq;
-    if(debug)
-    {
-        markedImage = cv_ptr->image;
-        cv::cvtColor(markedImage, queryImage, cv::COLOR_BGR2GRAY);
-        greyedImage = queryImage;
+    if(run){ 
+        cv_bridge::CvImagePtr cv_ptr;
+        try
+        {
+          cv_ptr = cv_bridge::toCvCopy(msg, sensor_msgs::image_encodings::BGR8);
+        }
+        catch(cv_bridge::Exception &e)
+        {
+            ROS_ERROR("cv_bridge exception: %s", e.what());
+            return;
+        }
+
+        sceneID = msg.header.seq;
+        if(debug)
+        {
+          markedImage = cv_ptr->image;
+          cv::cvtColor(markedImage, queryImage, cv::COLOR_BGR2GRAY);
+          greyedImage = queryImage;
+        }
     }
 }
 
-static void odomCb(const nav_msgs::Odometry msg){ odom = msg; }
+static void odomCb(const nav_msgs::Odometry msg){if(run) odom = msg;}
 
 static void findBestImages( const std::vector<cv::Mat>& trainImages, const std::vector<cv::DMatch>& matches )
 {
@@ -170,8 +172,11 @@ int main(int argc, char** argv)
     ros::init(argc, argv, "sifter");
     ros::NodeHandle sh, ph("~");
     ros::Rate loopRate(10);
+    // double f_time;
 
     loadParams(ph);
+
+    ros::ServiceServer exec_server = ph.advertiseService("terminate", serviceCall);
 
     ros::Subscriber imgSub = sh.subscribe<sensor_msgs::Image>("image_raw", 1, imageCb);
     ros::Subscriber odomSub = sh.subscribe<nav_msgs::Odometry>("odom", 10, odomCb);
@@ -182,8 +187,11 @@ int main(int argc, char** argv)
     ros::Publisher countPub = ph.advertise<std_msgs::Int32>("keypoints", 1);
     ros::Publisher greyPub = ph.advertise<sensor_msgs::Image>("greyed_image", 1);
     ros::Publisher objPub = sh.advertise<mav_utils_msgs::BBPoses>("object_poses", 1);
+    // ros::Publisher timePub = ph.advertise<std_msgs::Float64MultiArray>("times",1);
 
     cv::Ptr<cv::Feature2D> detector = cv::xfeatures2d::SIFT::create();
+    // cv::Ptr<cv::Feature2D> detector = cv::xfeatures2d::SURF::create();
+
     cv::FlannBasedMatcher matcher = cv::FlannBasedMatcher(cv::makePtr<cv::flann::KDTreeIndexParams>(5));
 
     std::vector<cv::Mat> trainImages; std::vector<std::string> trainImagesNames;
@@ -194,30 +202,37 @@ int main(int argc, char** argv)
 
     std::vector<cv::KeyPoint> queryKeypoints; cv::Mat queryDescriptors; std::vector<cv::DMatch> matches;
 
-    while(ros::ok())
+    while(ros::ok() && !(exit))
     {
-        while(sceneID == 0 && odom.pose.pose.position.z == 0) ros::spinOnce();
-
-        detectAndComputeQueryKeypoints( queryImage, queryKeypoints, queryDescriptors, detector );
-        matchDescriptors( queryDescriptors, trainDescriptors, matches, matcher );
-        findBestImages( trainImages, matches );
-        findHomographies( queryKeypoints, trainKeypoints, matches );
-        findCentres();
-        if(debug) markHomographies( markedImage );
-
-        mav_utils_msgs::BBPoses pose_msg = findPoses( &centres );
-        pose_msg.imageID = sceneID; pose_msg.stamp = ros::Time::now();
-        if(!pose_msg.object_poses.empty()) objPub.publish(pose_msg);
-
-        if(debug)
+        if(run)
         {
-            sensor_msgs::ImagePtr msg = cv_bridge::CvImage(std_msgs::Header(), "bgr8", markedImage).toImageMsg();
-            sensor_msgs::ImagePtr key_msg = cv_bridge::CvImage(std_msgs::Header(), "bgr8", keyedImage).toImageMsg();
-            sensor_msgs::ImagePtr grey_msg = cv_bridge::CvImage(std_msgs::Header(), "mono8", greyedImage).toImageMsg();
-            std_msgs::Int32MultiArray match_msg; std_msgs::Int32 keypts_msg;
-            keypts_msg.data = queryPoints;
-            for(int i = 0; i < numMatches.size(); i++) match_msg.data.push_back(numMatches[i]); greyPub.publish(grey_msg);
-            imgPub.publish(msg); keyPub.publish(key_msg); countPub.publish(keypts_msg); matchPub.publish(match_msg);
+          while(sceneID == 0 && odom.pose.pose.position.z == 0) ros::spinOnce();
+
+            // times.clear();
+            detectAndComputeQueryKeypoints( queryImage, queryKeypoints, queryDescriptors, detector );
+            matchDescriptors( queryDescriptors, trainDescriptors, matches, matcher );
+            findBestImages( trainImages, matches );
+            findHomographies( queryKeypoints, trainKeypoints, matches );
+            findCentres();
+            if(debug) markHomographies( markedImage );
+
+            mav_utils_msgs::BBPoses pose_msg = findPoses( &centres );
+            pose_msg.imageID = sceneID; pose_msg.stamp = ros::Time::now();
+            if(!pose_msg.object_poses.empty()) objPub.publish(pose_msg);
+
+            if(debug)
+            {
+                sensor_msgs::ImagePtr msg = cv_bridge::CvImage(std_msgs::Header(), "bgr8", markedImage).toImageMsg();
+                sensor_msgs::ImagePtr key_msg = cv_bridge::CvImage(std_msgs::Header(), "bgr8", keyedImage).toImageMsg();
+                sensor_msgs::ImagePtr grey_msg = cv_bridge::CvImage(std_msgs::Header(), "mono8", greyedImage).toImageMsg();
+                std_msgs::Int32MultiArray match_msg; std_msgs::Int32 keypts_msg;
+                // std_msgs::Float64MultiArray time_msg;
+                keypts_msg.data = queryPoints;
+                // for(int i = 0; i < times.size(); i++) time_msg.data.push_back(times[i]);
+                for (int i = 0; i < numMatches.size(); i++) match_msg.data.push_back(numMatches[i]);
+                greyPub.publish(grey_msg); imgPub.publish(msg); keyPub.publish(key_msg); countPub.publish(keypts_msg); matchPub.publish(match_msg);
+                // timePub.publish(time_msg);
+            }
         }
 
         ros::spinOnce();

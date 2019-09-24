@@ -6,12 +6,14 @@
 
 #include <std_msgs/Int32.h>
 #include <std_msgs/Int32MultiArray.h>
+#include <std_msgs/Float64MultiArray.h>
 #include <mav_utils_msgs/BBPose.h>
 #include <mav_utils_msgs/BBPoses.h>
 #include <sensor_msgs/Image.h>
 #include <nav_msgs/Odometry.h>
 #include <cv_bridge/cv_bridge.h>
 #include <tf/transform_datatypes.h>
+#include <mav_utils_msgs/signal.h>
 
 #include <opencv-3.3.1-dev/opencv2/highgui/highgui.hpp>
 #include <opencv-3.3.1-dev/opencv2/features2d/features2d.hpp>
@@ -23,6 +25,26 @@
 #include <opencv-3.3.1-dev/opencv2/opencv_modules.hpp>
 
 #define check(X) std::cout << X << std::endl
+#define exit execFlag == -1
+#define run execFlag == 1
+
+#define c_time(f)                                                                \
+    tm.reset();                                                                  \
+    tm.start();                                                                  \
+    f;                                                                           \
+    tm.stop();                                                                   \
+    f_time = tm.getTimeMilli();                                                  \
+    check(f_time)
+
+#define s_time(f)                                                                \
+    tm.reset();                                                                  \
+    tm.start();                                                                  \
+    f;                                                                           \
+    tm.stop();                                                                   \
+    f_time = tm.getTimeMilli();                                                  \
+    times.push_back(f_time)
+
+int execFlag = 0;
 
 struct imgData
 {
@@ -30,7 +52,8 @@ struct imgData
     int rows;
     int idx;
     std::vector<int> matchIdxs;
-    imgData(int cols_, int rows_, int idx_, std::vector<int> matchIdxs_) : cols(cols_), rows(rows_), idx(idx_), matchIdxs(matchIdxs_){}
+    imgData(int cols_, int rows_, int idx_, std::vector<int> matchIdxs_)
+      : cols(cols_), rows(rows_), idx(idx_), matchIdxs(matchIdxs_) {}
 };
 
 std::string fileWithTrainImages = "in/train.txt";
@@ -46,11 +69,12 @@ double ratio = 0.7;
 bool debug = true, sizeCheckFlag = false;
 
 std::vector<int> numMatches, imageIDs, objectIDs, pixelSizes;
-std::vector<double> areas;
+std::vector<double> areas, times;
 std::vector<cv::Point2f> centres;
 std::vector<std::array<cv::Point2f, 4>> objects;
 std::vector<imgData> bestImages;
 
+cv::TickMeter tm;
 cv::Mat intrinsic = cv::Mat_<double>(3,3);
 cv::Mat distCoeffs = cv::Mat_<double>(1,5);
 cv::Mat queryImage, markedImage, keyedImage, greyedImage;
@@ -65,7 +89,7 @@ static void loadParams(ros::NodeHandle nh)
     std::vector<double> tempList;
     int tempIdx=0;
 
-    nh.getParam("ratio", ratio);    
+    nh.getParam("ratio", ratio);
     nh.getParam("images", numTrainImages);
     nh.getParam("debug", debug);
     nh.getParam("minPoints", min_points);
@@ -109,7 +133,8 @@ static void loadParams(ros::NodeHandle nh)
             intrinsic.at<double>(i,j) = tempList[tempIdx++];
         }
     }
-        for(int i=0; i<3; i++)
+
+    for(int i=0; i<3; i++)
     {
         for(int j=0; j<3; j++)
         {
@@ -125,12 +150,30 @@ static void loadParams(ros::NodeHandle nh)
     return;
 }
 
-mav_utils_msgs::BBPoses findPoses(std::vector<cv::Point2f> *ptr)
+bool serviceCall(mav_utils_msgs::signal::Request &req, mav_utils_msgs::signal::Response &res) {
+    switch (req.signal)
+    {
+        case -1:
+        case 0:
+        case 1: execFlag = req.signal;
+                switch (execFlag) {
+                    case 0: ROS_INFO("Paused"); break;
+                    case 1: ROS_INFO("Starting"); break;
+                    case -1: ROS_INFO("Exiting"); break;
+                }
+                res.success = true; break;
+        default: res.success = false;break;
+    }
+    return true;
+}
+
+mav_utils_msgs::BBPoses findPoses(std::vector<cv::Point2f> *ptr) 
 {
     mav_utils_msgs::BBPoses msg;
     Eigen::Matrix3f scaleUp, quadToGlob;
 
-    tf::Quaternion q1(odom.pose.pose.orientation.x, odom.pose.pose.orientation.y, odom.pose.pose.orientation.z, odom.pose.pose.orientation.w);
+    tf::Quaternion q1(odom.pose.pose.orientation.x, odom.pose.pose.orientation.y,
+                    odom.pose.pose.orientation.z, odom.pose.pose.orientation.w);
     Eigen::Quaternionf quat = Eigen::Quaternionf(q1.w(), q1.x(), q1.y(), q1.z());
     quadToGlob = quat.toRotationMatrix();
 

@@ -3,7 +3,7 @@
     <node pkg="feature_detector" type="sift" name="sifter" output="screen" respawn="false" respawn_delay="0">
         <rosparam file="$(find feature_detector)/cfg/sift.yaml"/>
         <rosparam file="$(env HOME)/.ros/camera_info/mv.yaml"/>
-        <remap from="image_raw" to="/mv/image_raw" />
+        <remap from="image_raw" to="/camera/image_raw" />
         <remap from="odom" to="odom"/>
         <remap from="matches" to="matches"/>
         <remap from="keypoints" to="keypoints"/>
@@ -11,5 +11,6 @@
         <remap from="marked_image" to="marked_image"/>
         <remap from="keyed_image" to="keyed_image"/>
         <remap from="greyed_image" to="greyed_image"/>
+        <remap from="times" to="times"/>
     </node>
 </launch>

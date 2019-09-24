@@ -11,7 +11,7 @@ objects: 1
 # 0 for drone, 1 for house
 objectIDs: [0,0]
 
-sizes: [2500, 4000]
+sizes: [5000,5000]
 
 debug: true
 
@@ -21,7 +21,7 @@ error:
   size: 400
   length: 20
 
-ratio: 0.7
+ratio: 0.85
 
 minPoints: 4
 
